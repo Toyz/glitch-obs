@@ -1,0 +1,52 @@
+use std::env;
+use std::path::PathBuf;
+
+fn main() {
+    let mut include_paths: Vec<PathBuf> = Vec::new();
+
+    // OBS_INCLUDE_PATH — set by CI for Windows/macOS where pkg-config
+    // isn't available.  Colon-separated list of directories containing
+    // OBS headers (libobs/, obs-websocket-api.h, etc.).
+    if let Ok(p) = env::var("OBS_INCLUDE_PATH") {
+        for part in p.split(':') {
+            include_paths.push(PathBuf::from(part));
+        }
+    }
+
+    // pkg-config (Linux / local dev) — finds libobs headers + link paths
+    match pkg_config::Config::new()
+        .atleast_version("28.0")
+        .probe("libobs")
+    {
+        Ok(lib) => {
+            for path in &lib.include_paths {
+                println!("cargo:include={}", path.display());
+                include_paths.push(path.clone());
+            }
+            for path in &lib.link_paths {
+                println!("cargo:rustc-link-search=native={}", path.display());
+            }
+        }
+        Err(e) => {
+            println!("cargo:warning=pkg-config could not find libobs: {e}");
+            println!("cargo:rustc-link-search=native=/usr/lib");
+            include_paths.push(PathBuf::from("/usr/include/obs"));
+        }
+    }
+
+    // Compile the C shim that wraps obs-websocket inline API functions
+    let mut cc = cc::Build::new();
+    cc.file("src/ws_shim.c");
+    for p in &include_paths {
+        cc.include(p);
+        // OBS headers may live in an obs/ subdirectory
+        let sub = p.join("obs");
+        if sub.is_dir() {
+            cc.include(&sub);
+        }
+    }
+    cc.compile("ws_shim");
+
+    println!("cargo:rerun-if-changed=src/ws_shim.c");
+    println!("cargo:rerun-if-env-changed=OBS_INCLUDE_PATH");
+}

@@ -1,0 +1,168 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  OBS_VERSION: "32.1.1"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: libobs_glitch.so
+            target: x86_64-unknown-linux-gnu
+
+          - os: windows-latest
+            artifact: obs_glitch.dll
+            target: x86_64-pc-windows-msvc
+
+          - os: macos-latest
+            artifact: libobs_glitch.dylib
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry + index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo target dir
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src/**', 'glitch/**', 'build.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-target-
+
+      # ── Linux: system packages provide everything ──────────────
+      - name: Install OBS SDK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libobs-dev obs-websocket-dev || true
+          # obs-websocket-api.h may ship with obs-studio itself
+          sudo apt-get install -y obs-studio || true
+
+      # ── Windows: download OBS release + source headers ─────────
+      - name: Cache OBS SDK (Windows)
+        if: runner.os == 'Windows'
+        id: cache-obs-win
+        uses: actions/cache@v4
+        with:
+          path: |
+            obs-release
+            obs-src
+          key: windows-obs-${{ env.OBS_VERSION }}
+
+      - name: Download OBS SDK (Windows)
+        if: runner.os == 'Windows' && steps.cache-obs-win.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          # Pre-built OBS (contains obs.dll for import-lib generation)
+          $zipUrl = "https://github.com/obsproject/obs-studio/releases/download/${{ env.OBS_VERSION }}/OBS-Studio-${{ env.OBS_VERSION }}-Windows-x64.zip"
+          Invoke-WebRequest -Uri $zipUrl -OutFile obs.zip
+          Expand-Archive obs.zip -DestinationPath obs-release
+
+          # OBS source (headers only, sparse checkout)
+          git clone --depth 1 --branch "${{ env.OBS_VERSION }}" `
+            --filter=blob:none --sparse `
+            https://github.com/obsproject/obs-studio.git obs-src
+          Push-Location obs-src
+          git sparse-checkout set libobs plugins/obs-websocket/lib
+          Pop-Location
+
+      - name: Set OBS paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $obsRelease = Resolve-Path "obs-release"
+          $obsSrc     = Resolve-Path "obs-src"
+
+          # Find the bin dir containing obs.dll
+          $dllDir = Get-ChildItem -Recurse -Filter "obs.dll" $obsRelease |
+                    Select-Object -First 1 |
+                    ForEach-Object { $_.DirectoryName }
+
+          echo "LIBOBS_PATH=$dllDir"                                            >> $env:GITHUB_ENV
+          echo "OBS_INCLUDE_PATH=$obsSrc/libobs:$obsSrc/plugins/obs-websocket/lib" >> $env:GITHUB_ENV
+
+      # ── macOS: brew provides dylib, source checkout for headers ─
+      - name: Cache OBS source (macOS)
+        if: runner.os == 'macOS'
+        id: cache-obs-mac
+        uses: actions/cache@v4
+        with:
+          path: obs-src
+          key: macos-obs-src-${{ env.OBS_VERSION }}
+
+      - name: Install OBS (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install --cask obs 2>/dev/null || true
+
+      - name: Download OBS headers (macOS)
+        if: runner.os == 'macOS' && steps.cache-obs-mac.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "${{ env.OBS_VERSION }}" \
+            --filter=blob:none --sparse \
+            https://github.com/obsproject/obs-studio.git obs-src
+          cd obs-src && git sparse-checkout set libobs plugins/obs-websocket/lib
+
+      - name: Set OBS paths (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "OBS_INCLUDE_PATH=$PWD/obs-src/libobs:$PWD/obs-src/plugins/obs-websocket/lib" >> "$GITHUB_ENV"
+
+      # ── Build ──────────────────────────────────────────────────
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glitch-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  # ── Release (only on version tags) ───────────────────────────
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: artifacts/glitch-*/*

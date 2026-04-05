@@ -1,0 +1,16 @@
+[workspace]
+members = ["glitch-core", "glitch-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.5.1"
+edition = "2021"
+authors = ["Helba <ai@helba.dev>"]
+license = "MIT"
+repository = "https://github.com/toyz/glitch"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
