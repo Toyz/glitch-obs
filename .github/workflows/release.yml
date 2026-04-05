@@ -64,14 +64,15 @@ jobs:
             ${{ runner.os }}-cargo-target-
 
       # ── OBS source headers (all platforms) ─────────────────────
-      # obs-websocket-api.h lives only in OBS source.
       # build.rs auto-generates the missing obsconfig.h stub.
+      # obs-websocket is a submodule inside obs-studio, so sparse
+      # checkout can't fetch it — we download the header directly.
       - name: Cache OBS source headers
         id: cache-obs-src
         uses: actions/cache@v4
         with:
           path: obs-src
-          key: obs-src-${{ env.OBS_VERSION }}
+          key: obs-src-${{ env.OBS_VERSION }}-v2
 
       - name: Checkout OBS source headers
         if: steps.cache-obs-src.outputs.cache-hit != 'true'
@@ -79,17 +80,24 @@ jobs:
           git clone --depth 1 --branch "${{ env.OBS_VERSION }}" \
             --sparse \
             https://github.com/obsproject/obs-studio.git obs-src
-          cd obs-src && git sparse-checkout set libobs plugins/obs-websocket/lib
+          cd obs-src && git sparse-checkout set libobs
+
+      - name: Download obs-websocket header
+        run: |
+          mkdir -p obs-src/plugins/obs-websocket/lib
+          if [ ! -f obs-src/plugins/obs-websocket/lib/obs-websocket-api.h ]; then
+            curl -sL -o obs-src/plugins/obs-websocket/lib/obs-websocket-api.h \
+              "https://raw.githubusercontent.com/obsproject/obs-websocket/master/lib/obs-websocket-api.h"
+          fi
 
       # ── Linux ──────────────────────────────────────────────────
-      # Install OBS via official PPA — gives us libobs-dev with
-      # compiled headers (including obsconfig.h) and pkg-config.
+      # Ubuntu 24.04 ships OBS 30.x — satisfies our >= 28.0 req.
+      # libobs-dev provides headers, pkg-config, and link libs.
       - name: Install OBS (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo add-apt-repository -y ppa:obsproject/obs-studio
           sudo apt-get update
-          sudo apt-get install -y obs-studio libobs-dev
+          sudo apt-get install -y libobs-dev
 
       - name: Set OBS paths (Linux)
         if: runner.os == 'Linux'
