@@ -4,12 +4,14 @@ use std::path::PathBuf;
 fn main() {
     let mut include_paths: Vec<PathBuf> = Vec::new();
 
-    // OBS_INCLUDE_PATH — set by CI for Windows/macOS where pkg-config
-    // isn't available.  Colon-separated list of directories containing
-    // OBS headers (libobs/, obs-websocket-api.h, etc.).
+    // OBS_INCLUDE_PATH — set by CI to point at OBS source header dirs.
+    // Semicolon-separated on Windows, colon-separated elsewhere.
     if let Ok(p) = env::var("OBS_INCLUDE_PATH") {
-        for part in p.split(':') {
-            include_paths.push(PathBuf::from(part));
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        for part in p.split(sep) {
+            if !part.is_empty() {
+                include_paths.push(PathBuf::from(part));
+            }
         }
     }
 
@@ -39,7 +41,6 @@ fn main() {
     cc.file("src/ws_shim.c");
     for p in &include_paths {
         cc.include(p);
-        // OBS headers may live in an obs/ subdirectory
         let sub = p.join("obs");
         if sub.is_dir() {
             cc.include(&sub);
