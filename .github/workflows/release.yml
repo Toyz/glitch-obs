@@ -138,9 +138,19 @@ jobs:
       - name: Set OBS paths (macOS)
         if: runner.os == 'macOS'
         run: |
-          if [ -d "/Applications/OBS.app/Contents/Frameworks" ]; then
-            echo "LIBOBS_PATH=/Applications/OBS.app/Contents/Frameworks" >> "$GITHUB_ENV"
+          OBS_FW="/Applications/OBS.app/Contents/Frameworks"
+          mkdir -p /tmp/obs-lib
+
+          # OBS.app ships libobs inside a macOS framework bundle, but
+          # obs-sys expects a plain libobs.0.dylib.  Create a symlink.
+          if [ -f "$OBS_FW/libobs.0.dylib" ]; then
+            ln -sf "$OBS_FW/libobs.0.dylib" /tmp/obs-lib/libobs.0.dylib
+          elif [ -f "$OBS_FW/libobs.framework/libobs" ]; then
+            ln -sf "$OBS_FW/libobs.framework/libobs" /tmp/obs-lib/libobs.0.dylib
           fi
+          ls -la /tmp/obs-lib/
+
+          echo "LIBOBS_PATH=/tmp/obs-lib" >> "$GITHUB_ENV"
           SIMDE_PREFIX="$(brew --prefix simde)"
           echo "OBS_INCLUDE_PATH=${{ github.workspace }}/obs-src/libobs:${{ github.workspace }}/obs-src/plugins/obs-websocket/lib:${SIMDE_PREFIX}/include" >> "$GITHUB_ENV"
 

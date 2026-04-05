@@ -86,7 +86,7 @@ pub unsafe extern "C" fn obs_module_load() -> bool {
     info.get_defaults = Some(glitch_get_defaults);
     info.update = Some(glitch_update);
 
-    obs_register_source_s(&info, mem::size_of::<obs_source_info>() as u64);
+    obs_register_source_s(&info, mem::size_of::<obs_source_info>() as _);
 
     blog(
         LOG_INFO as i32,
