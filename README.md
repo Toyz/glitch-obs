@@ -52,7 +52,7 @@ Or use the install script:
 
 ### Expression syntax
 
-Expressions are mapped over every pixel's color components, returning a new value (0-255). Based on [sug0/go-glitch](https://github.com/sug0/go-glitch).
+Expressions are mapped over every pixel's color components, returning a new value (0-255). Powered by [glitch-core](https://github.com/Toyz/glitch).
 
 **Try expressions live at [theglitch.ing](https://theglitch.ing)** to preview the output before using them in OBS.
 

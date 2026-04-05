@@ -17,18 +17,21 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            artifact: libobs_glitch.so
+            artifact: libglitch.so
             target: x86_64-unknown-linux-gnu
 
-          - os: windows-latest
-            artifact: obs_glitch.dll
-            target: x86_64-pc-windows-msvc
-
           - os: macos-latest
-            artifact: libobs_glitch.dylib
+            artifact: libglitch.dylib
             target: aarch64-apple-darwin
 
+          - os: windows-latest
+            artifact: glitch.dll
+            target: x86_64-pc-windows-msvc
+
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +75,7 @@ jobs:
         if: steps.cache-obs-src.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch "${{ env.OBS_VERSION }}" \
-            --filter=blob:none --sparse \
+            --sparse \
             https://github.com/obsproject/obs-studio.git obs-src
           cd obs-src && git sparse-checkout set libobs plugins/obs-websocket/lib
 
@@ -102,7 +105,7 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://github.com/obsproject/obs-studio/releases/download/${{ env.OBS_VERSION }}/OBS-Studio-${{ env.OBS_VERSION }}-Windows-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile obs.zip
+          Invoke-WebRequest -Uri $url -OutFile obs.zip -UseBasicParsing
           Expand-Archive obs.zip -DestinationPath obs-release
 
       - name: Set OBS paths (Windows)
@@ -114,13 +117,15 @@ jobs:
           $dllDir = $dll.DirectoryName
           $src = Resolve-Path "obs-src"
 
-          echo "LIBOBS_PATH=$dllDir"                                                  >> $env:GITHUB_ENV
-          echo "OBS_INCLUDE_PATH=$src\libobs;$src\plugins\obs-websocket\lib"          >> $env:GITHUB_ENV
+          echo "LIBOBS_PATH=$dllDir"                                       >> $env:GITHUB_ENV
+          echo "OBS_INCLUDE_PATH=${src}\libobs;${src}\plugins\obs-websocket\lib" >> $env:GITHUB_ENV
 
       # ── macOS ──────────────────────────────────────────────────
-      - name: Install OBS (macOS)
+      - name: Install OBS and SIMDE (macOS)
         if: runner.os == 'macOS'
-        run: brew install --cask obs
+        run: |
+          brew install --cask obs
+          brew install simde
 
       - name: Set OBS paths (macOS)
         if: runner.os == 'macOS'
@@ -129,7 +134,8 @@ jobs:
           if [ -d "/Applications/OBS.app/Contents/Frameworks" ]; then
             echo "LIBOBS_PATH=/Applications/OBS.app/Contents/Frameworks" >> "$GITHUB_ENV"
           fi
-          echo "OBS_INCLUDE_PATH=${{ github.workspace }}/obs-src/libobs:${{ github.workspace }}/obs-src/plugins/obs-websocket/lib" >> "$GITHUB_ENV"
+          SIMDE_PREFIX="$(brew --prefix simde)"
+          echo "OBS_INCLUDE_PATH=${{ github.workspace }}/obs-src/libobs:${{ github.workspace }}/obs-src/plugins/obs-websocket/lib:${SIMDE_PREFIX}/include" >> "$GITHUB_ENV"
 
       # ── Build ──────────────────────────────────────────────────
       - name: Build release

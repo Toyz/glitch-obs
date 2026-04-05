@@ -5,7 +5,7 @@ edition = "2021"
 description = "OBS Studio video filter plugin — real-time glitch effects via expression engine"
 
 [lib]
-name = "obs_glitch"
+name = "glitch"
 crate-type = ["cdylib"]
 
 [dependencies]
