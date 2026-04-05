@@ -35,6 +35,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -62,8 +64,8 @@ jobs:
             ${{ runner.os }}-cargo-target-
 
       # ── OBS source headers (all platforms) ─────────────────────
-      # obs-websocket-api.h is NOT in libobs-dev, only in the OBS
-      # source tree, so we sparse-checkout the dirs we need.
+      # obs-websocket-api.h lives only in OBS source.
+      # build.rs auto-generates the missing obsconfig.h stub.
       - name: Cache OBS source headers
         id: cache-obs-src
         uses: actions/cache@v4
@@ -80,48 +82,46 @@ jobs:
           cd obs-src && git sparse-checkout set libobs plugins/obs-websocket/lib
 
       # ── Linux ──────────────────────────────────────────────────
-      - name: Install OBS library (Linux)
+      # Install OBS via official PPA — gives us libobs-dev with
+      # compiled headers (including obsconfig.h) and pkg-config.
+      - name: Install OBS (Linux)
         if: runner.os == 'Linux'
         run: |
+          sudo add-apt-repository -y ppa:obsproject/obs-studio
           sudo apt-get update
-          sudo apt-get install -y libobs-dev
+          sudo apt-get install -y obs-studio libobs-dev
 
       - name: Set OBS paths (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "OBS_INCLUDE_PATH=${{ github.workspace }}/obs-src/libobs:${{ github.workspace }}/obs-src/plugins/obs-websocket/lib" >> "$GITHUB_ENV"
+          echo "OBS_INCLUDE_PATH=${{ github.workspace }}/obs-src/plugins/obs-websocket/lib" >> "$GITHUB_ENV"
 
       # ── Windows ────────────────────────────────────────────────
-      - name: Cache OBS release (Windows)
+      # Install OBS via choco — obs-sys finds obs.dll via the
+      # Windows registry automatically.
+      - name: Install OBS (Windows)
         if: runner.os == 'Windows'
-        id: cache-obs-win
-        uses: actions/cache@v4
-        with:
-          path: obs-release
-          key: windows-obs-release-${{ env.OBS_VERSION }}
-
-      - name: Download OBS release (Windows)
-        if: runner.os == 'Windows' && steps.cache-obs-win.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $url = "https://github.com/obsproject/obs-studio/releases/download/${{ env.OBS_VERSION }}/OBS-Studio-${{ env.OBS_VERSION }}-Windows-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile obs.zip -UseBasicParsing
-          Expand-Archive obs.zip -DestinationPath obs-release
+        run: choco install obs-studio -y --no-progress
 
       - name: Set OBS paths (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Recurse -Filter "obs.dll" obs-release |
+          # Find obs.dll from choco install
+          $obsDir = "${env:ProgramFiles}\obs-studio"
+          $dll = Get-ChildItem -Recurse -Filter "obs.dll" $obsDir -ErrorAction SilentlyContinue |
                  Select-Object -First 1
-          $dllDir = $dll.DirectoryName
+          if ($dll) {
+            echo "LIBOBS_PATH=$($dll.DirectoryName)" >> $env:GITHUB_ENV
+          }
           $src = Resolve-Path "obs-src"
-
-          echo "LIBOBS_PATH=$dllDir"                                       >> $env:GITHUB_ENV
           echo "OBS_INCLUDE_PATH=${src}\libobs;${src}\plugins\obs-websocket\lib" >> $env:GITHUB_ENV
 
       # ── macOS ──────────────────────────────────────────────────
-      - name: Install OBS and SIMDE (macOS)
+      # brew --cask obs gives us the .app bundle (no headers).
+      # We use OBS source headers + auto-generated obsconfig.h stub.
+      # simde is needed for SSE emulation headers on ARM.
+      - name: Install OBS (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install --cask obs
@@ -130,7 +130,6 @@ jobs:
       - name: Set OBS paths (macOS)
         if: runner.os == 'macOS'
         run: |
-          # obs-sys looks here automatically, but set LIBOBS_PATH to be safe
           if [ -d "/Applications/OBS.app/Contents/Frameworks" ]; then
             echo "LIBOBS_PATH=/Applications/OBS.app/Contents/Frameworks" >> "$GITHUB_ENV"
           fi
