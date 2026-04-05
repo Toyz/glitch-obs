@@ -105,8 +105,8 @@ jobs:
           echo "OBS_INCLUDE_PATH=${{ github.workspace }}/obs-src/plugins/obs-websocket/lib" >> "$GITHUB_ENV"
 
       # ── Windows ────────────────────────────────────────────────
-      # Install OBS via choco — obs-sys finds obs.dll via the
-      # Windows registry automatically.
+      # Choco installs obs.dll but NOT obs.lib (import library).
+      # We generate obs.lib from obs.dll using MSVC dumpbin + lib.
       - name: Install OBS (Windows)
         if: runner.os == 'Windows'
         run: choco install obs-studio -y --no-progress
@@ -115,13 +115,33 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Find obs.dll from choco install
           $obsDir = "${env:ProgramFiles}\obs-studio"
           $dll = Get-ChildItem -Recurse -Filter "obs.dll" $obsDir -ErrorAction SilentlyContinue |
                  Select-Object -First 1
-          if ($dll) {
-            echo "LIBOBS_PATH=$($dll.DirectoryName)" >> $env:GITHUB_ENV
+          if (-not $dll) { throw "obs.dll not found in $obsDir" }
+          $dllDir = $dll.DirectoryName
+
+          # Locate MSVC tools
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+                      -latest -property installationPath
+          $msvcVer = (Get-ChildItem "$vsPath\VC\Tools\MSVC" |
+                      Sort-Object Name -Descending | Select-Object -First 1).Name
+          $toolDir = "$vsPath\VC\Tools\MSVC\$msvcVer\bin\HostX64\x64"
+
+          # Generate obs.lib from obs.dll
+          $dump = & "$toolDir\dumpbin.exe" /exports $dll.FullName
+          $def = @("LIBRARY obs", "EXPORTS")
+          foreach ($line in $dump) {
+            if ($line -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)') {
+              $def += "    $($Matches[1])"
+            }
           }
+          $defPath = Join-Path $dllDir "obs.def"
+          $def | Set-Content -Path $defPath -Encoding ASCII
+          & "$toolDir\lib.exe" "/def:$defPath" "/out:$(Join-Path $dllDir 'obs.lib')" /machine:x64
+          if (-not (Test-Path (Join-Path $dllDir "obs.lib"))) { throw "Failed to generate obs.lib" }
+
+          echo "LIBOBS_PATH=$dllDir" >> $env:GITHUB_ENV
           $src = Resolve-Path "obs-src"
           echo "OBS_INCLUDE_PATH=${src}\libobs;${src}\plugins\obs-websocket\lib" >> $env:GITHUB_ENV
 
